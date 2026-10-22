@@ -121,7 +121,7 @@ tailwind.config = {
 /* =========================================================
    CONFIG & GAS INTEGRATION
    ========================================================= */
-const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbw2T62Ggl8mtJgel25FSHYH0bkeaf1kx-pcBHqWLOiRmFHFahJVOECrYryrUuiYgAzD4A/exec"; 
+const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbxZSlWG6BIFF59vFP4ao2W3NAZ_trZ1xPgMwMQNuOocRz7O2-lO1kVIW9AUw8uMiylz/exec"; 
 
 const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -829,7 +829,35 @@ function viewImage(newsId, idx){
     background:'#fff', backdrop:'rgba(15,23,42,.7)'
   });
 }
+/* ---------- ระดับชั้นหลัก + ห้องย่อย ---------- */
+const MAIN_LEVELS = ['ม.1','ม.2','ม.3','ม.4','ม.5','ม.6'];
+const mainLevelOf = lv => String(lv || '').split('/')[0].trim();   // 'ม.1/15' -> 'ม.1'
+let dashRoom = '';        // ห้องที่เลือกในกราฟย่อย ('' = ยังไม่เลือก)
+let chartInst2 = null;    // กราฟย่อย
 
+function getDashRecs(){
+  let recs = DB.records.filter(r => r.semesterId === dashSemId);
+  if(session?.role === 'teacher'){
+    const ids = mySubjectIds();
+    recs = recs.filter(r => ids.includes(r.subjectId));
+  }
+  return recs;
+}
+
+// รายชื่อห้องย่อย (เช่น ม.1/1, ม.2/3) จาก "ระดับชั้น" และจากรายการที่มีอยู่จริง เรียงตามลำดับ
+function getRoomList(){
+  const set = new Set();
+  DB.levels.forEach(l => { if(String(l).includes('/')) set.add(String(l).trim()); });
+  DB.records.forEach(r => { if(String(r.level || '').includes('/')) set.add(String(r.level).trim()); });
+  const key = s => {
+    const m = s.match(/ม\.(\d+)\s*\/\s*(\d+)/);
+    return m ? [+m[1], +m[2]] : [99, 0];
+  };
+  return [...set].sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    return ka[0] - kb[0] || ka[1] - kb[1] || a.localeCompare(b, 'th');
+  });
+}
 /* =========================================================
    8. PAGE : DASHBOARD
    ========================================================= */
@@ -849,11 +877,11 @@ function renderDashboard(){
   }
   if(!dashSemId || !sems.find(s => s.id === dashSemId)) dashSemId = DB.settings.currentSemesterId || sems[0].id;
 
-  let recs = DB.records.filter(r => r.semesterId === dashSemId);
-  if(role === 'teacher'){ const ids = mySubjectIds(); recs = recs.filter(r => ids.includes(r.subjectId)); }
-
+  const recs = getDashRecs();
   const st = statsFor(recs);
   const sem = sems.find(s => s.id === dashSemId);
+  const rooms = getRoomList();
+  if(dashRoom && !rooms.includes(dashRoom)) dashRoom = '';
 
   $('#content').innerHTML = `
     <div class="space-y-5">
@@ -888,7 +916,7 @@ function renderDashboard(){
         <div class="card p-5 lg:col-span-2">
           <div class="flex items-center gap-2 mb-3">
             <i class="fa-solid fa-chart-column text-primary"></i>
-            <h3 class="font-bold text-slate-800">กราฟสรุปภาพรวมแยกตามระดับชั้น</h3>
+            <h3 class="font-bold text-slate-800">กราฟสรุปภาพรวมแยกตามระดับชั้น (ม.1 - ม.6)</h3>
           </div>
           <div class="h-72"><canvas id="lvlChart"></canvas></div>
         </div>
@@ -898,8 +926,8 @@ function renderDashboard(){
             <h3 class="font-bold text-slate-800">สรุปตามระดับชั้น</h3>
           </div>
           <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
-            ${DB.levels.map(l=>{
-              const sub = recs.filter(r => r.level === l);
+            ${MAIN_LEVELS.map(l=>{
+              const sub = recs.filter(r => mainLevelOf(r.level) === l);
               const s2 = statsFor(sub);
               return `<div class="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
                 <div class="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-[12px] text-slate-600">${esc(l)}</div>
@@ -917,8 +945,32 @@ function renderDashboard(){
         </div>
       </div>
 
+      <!-- กราฟย่อย: เลือกห้อง -->
+      <div class="card p-5">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-chart-simple text-primary"></i>
+            <h3 class="font-bold text-slate-800">กราฟย่อยแยกตามห้องเรียน</h3>
+          </div>
+          <div class="ml-auto flex items-center gap-2">
+            <label class="text-[12px] font-semibold text-slate-500 hidden sm:block">เลือกห้อง</label>
+            <select id="dashRoomSel" class="inp !w-auto min-w-[190px]" onchange="onDashRoomChange(this.value)">
+              <option value="">-- เลือกห้อง (เช่น ม.2/1) --</option>
+              ${rooms.map(r=>`<option value="${esc(r)}" ${r===dashRoom?'selected':''}>${esc(r)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div id="roomEmpty" class="text-center py-12 text-slate-400">
+          <i class="fa-regular fa-hand-pointer text-4xl mb-3 block opacity-60"></i>
+          <p class="font-medium">${rooms.length ? 'กรุณาเลือกห้องเรียนเพื่อดูข้อมูล' : 'ยังไม่มีห้องเรียนย่อย (เพิ่มระดับชั้น เช่น ม.1/1 ที่เมนู "ข้อมูลพื้นฐาน")'}</p>
+        </div>
+        <div id="roomWrap" class="hidden">
+          <div id="roomSummary" class="flex flex-wrap gap-2 mb-3"></div>
+          <div class="h-64"><canvas id="roomChart"></canvas></div>
+        </div>
+      </div>
+
       ${role === 'admin' ? `
-      <!-- ส่วนแสดงอันดับครูผู้สอนที่นักเรียนติดผลการเรียนสูงสุด สำหรับผู้ดูแลระบบ -->
       <div class="card overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-amber-50/50 to-emerald-50/50">
           <div class="flex items-center gap-2.5">
@@ -938,7 +990,7 @@ function renderDashboard(){
       </div>` : ''}
     </div>`;
 
-  setTimeout(()=>drawLevelChart(recs), 60);
+  setTimeout(()=>{ drawLevelChart(recs); drawRoomChart(); }, 60);
 }
 
 function drawLevelChart(recs){
@@ -946,8 +998,9 @@ function drawLevelChart(recs){
   if(!cv) return;
   if(chartInst){ chartInst.destroy(); chartInst = null; }
   const d0 = [], dr = [], dms = [];
-  DB.levels.forEach(l=>{
-    const sub = recs.filter(r => r.level === l);
+  MAIN_LEVELS.forEach(l=>{
+    // รวมทุกห้องย่อยของระดับชั้นนั้น เช่น ม.1/1 ... ม.1/15 -> ม.1
+    const sub = recs.filter(r => mainLevelOf(r.level) === l);
     d0.push(sub.filter(r => (r.types||[]).includes('0')).length);
     dr.push(sub.filter(r => (r.types||[]).includes('ร')).length);
     dms.push(sub.filter(r => (r.types||[]).includes('มส')).length);
@@ -955,11 +1008,66 @@ function drawLevelChart(recs){
   chartInst = new Chart(cv, {
     type:'bar',
     data:{
-      labels: DB.levels,
+      labels: MAIN_LEVELS,
       datasets:[
         {label:'ติด 0', data:d0, backgroundColor:'#ef4444', borderRadius:6, maxBarThickness:34},
         {label:'ติด ร', data:dr, backgroundColor:'#f59e0b', borderRadius:6, maxBarThickness:34},
         {label:'ติด มส', data:dms, backgroundColor:'#3b82f6', borderRadius:6, maxBarThickness:34}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8, font:{family:'Sarabun', size:13}}}},
+      scales:{
+        x:{grid:{display:false}, ticks:{font:{family:'Sarabun'}}},
+        y:{beginAtZero:true, ticks:{precision:0, font:{family:'Sarabun'}}, grid:{color:'#f1f5f9'}}
+      }
+    }
+  });
+}
+
+/* ---------- กราฟย่อย: เลือกห้อง ---------- */
+function onDashRoomChange(v){
+  dashRoom = v;
+  drawRoomChart();
+}
+
+function drawRoomChart(){
+  const empty = document.getElementById('roomEmpty');
+  const wrap  = document.getElementById('roomWrap');
+  const cv    = document.getElementById('roomChart');
+  if(!empty || !wrap || !cv) return;
+
+  if(chartInst2){ chartInst2.destroy(); chartInst2 = null; }
+
+  // ยังไม่เลือกห้อง -> ไม่แสดงข้อมูล
+  if(!dashRoom){
+    wrap.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  empty.classList.add('hidden');
+  wrap.classList.remove('hidden');
+
+  const sub = getDashRecs().filter(r => String(r.level || '').trim() === dashRoom);
+  const s = statsFor(sub);
+
+  document.getElementById('roomSummary').innerHTML = `
+    <span class="chip bg-slate-100 text-slate-600">ห้อง ${esc(dashRoom)}</span>
+    <span class="chip bg-sky-100 text-sky-700">นักเรียนที่ติด ${s.total} คน</span>
+    <span class="chip bg-red-100 text-red-600">0: ${s.c0}</span>
+    <span class="chip bg-amber-100 text-amber-600">ร: ${s.cr}</span>
+    <span class="chip bg-blue-100 text-blue-600">มส: ${s.cms}</span>`;
+
+  chartInst2 = new Chart(cv, {
+    type:'bar',
+    data:{
+      labels:[dashRoom],
+      datasets:[
+        {label:'ติด 0',  data:[sub.filter(r => (r.types||[]).includes('0')).length],  backgroundColor:'#ef4444', borderRadius:6, maxBarThickness:60},
+        {label:'ติด ร',  data:[sub.filter(r => (r.types||[]).includes('ร')).length],  backgroundColor:'#f59e0b', borderRadius:6, maxBarThickness:60},
+        {label:'ติด มส', data:[sub.filter(r => (r.types||[]).includes('มส')).length], backgroundColor:'#3b82f6', borderRadius:6, maxBarThickness:60}
       ]
     },
     options:{
