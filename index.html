@@ -1663,7 +1663,7 @@ function openRecordModal(id){
         status: $('#f_status').value
       };
 
-      showLoader('กำลังบันทึกข้อมูลลง Google Sheet...');
+      showLoader('กำลังบันทึกข้อมูล');
       try {
         if(isEdit){
           Object.assign(rec, payload, {studentName: rows[0].name, types: rows[0].types});
